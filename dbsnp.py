@@ -32,6 +32,7 @@ import sys as _sys
 import bz2 as _bz2
 import gzip as _gzip
 import argparse as _argparse
+from random import randint as _rand
 from subprocess import check_call as _call
 
 import pandas as pd
@@ -66,7 +67,8 @@ def join_rsid(rsids, dbsnp_file, outfile, sort=True, as_df=False):
         rsids = rsids.tolist()
 
     if isinstance(rsids, (list, tuple, set)):
-        tmpfile = 'outfile' + 'rsids.tmp'
+        rsids = sorted(list(set(rsids)))
+        tmpfile = outfile + 'rsids.tmp'
         with open(tmpfile, 'w') as fout:
             fout.write('\n'.join(rsids))
         rsids = tmpfile
@@ -79,8 +81,9 @@ def join_rsid(rsids, dbsnp_file, outfile, sort=True, as_df=False):
     if sort:
         print('Sorting')
         cat = 'zcat' if rsids.endswith('gz') else 'cat'
-        script = r"""{cat} {rsids} | sort -k1,1 > tmp45876; mv tmp45876 {rsids}"""
-        _call(script.format(cat=cat, rsids=rsids), shell=True)
+        tmpfile = 'tmpsort_{}'.format(_rand(1000,20000))
+        script = r"""{cat} {rsids} | sort -k1,1 > {tmp}; mv {tmp} {rsids}"""
+        _call(script.format(cat=cat, rsids=rsids, tmp=tmpfile), shell=True)
 
     print('Joining')
     script = r"""join {rsids} {dbsnp} > {outfile}"""
@@ -88,12 +91,16 @@ def join_rsid(rsids, dbsnp_file, outfile, sort=True, as_df=False):
           shell=True)
     print('Done, file {} has the joined list'.format(outfile))
 
-    if tmpfile:
-        _os.remove(tmpfile)
-
     if as_df:
         print('Getting DataFrame')
-        return pd.read_csv(outfile, sep='\t', header=None, index_col=0)
+        try:
+            df = pd.read_csv(outfile, sep=' ', header=None, index_col=0)
+        except pd.io.common.EmptyDataError:
+            print('Joined file empty, skipping')
+            return None
+        df.index.name = None
+        df.columns = ['chrom', 'start', 'end']
+        return df
 
 
 def join_location(locs, dbsnp_file, outfile, sort=True, as_df=False):
@@ -116,14 +123,14 @@ def join_location(locs, dbsnp_file, outfile, sort=True, as_df=False):
         DataFrame: Dataframe of written table, only returned if as_df is true.
     """
     if isinstance(locs, pd.core.series.Series):
-        locs = locs.tolist()
+        locs = sorted(list(set(locs.tolist())))
 
     if isinstance(locs, pd.core.frame.DataFrame):
         locs = locs.chrom.astype(str) + '.' + locs.position.astype(str)
-        locs = locs.tolist()
+        locs = sorted(list(set(locs.tolist())))
 
     if isinstance(locs, (list, tuple, set)):
-        tmpfile = 'outfile' + 'locs.tmp'
+        tmpfile = outfile + 'locs.tmp'
         with open(tmpfile, 'w') as fout:
             fout.write('\n'.join(locs))
         locs = tmpfile
@@ -149,37 +156,44 @@ def join_location(locs, dbsnp_file, outfile, sort=True, as_df=False):
 
     if as_df:
         print('Getting DataFrame')
-        df = pd.read_csv(outfile, sep='\t', header=None)
-        df.columns = ['chrom.pos', 'rsid']
-        df['chrom'], df['position'] = df['chrom.pos'].str.split('.', 1).str
-        df.set_index('chrom.pos', drop=True)
-        return df
+        try:
+            lookup = pd.read_csv(outfile, sep=' ', header=None, index_col=0)
+        except pd.io.common.EmptyDataError:
+            print('Joined file empty, skipping')
+            return None
+        lookup.index.name = None
+        lookup['chrom'], lookup['position'] = lookup.index.to_series().str.split('.', 1).str
+        lookup.columns = ['rsid', 'chrom', 'position']
+        lookup = lookup[['chrom', 'position', 'rsid']]
+        return lookup
 
 
-def make_lookup_tables(dbsnp_file, outname='dbsnp_filtered'):
+def make_lookup_tables(dbsnp_file, outname='dbsnp_filtered',
+                       skip_filter=False):
     """Create a series of easy lookup tables from dbSNP files."""
     filtered_bed = '{}.snp_only.bed'.format(outname)
-    print('Making filtered snp_only bed file')
-    with open_zipped(dbsnp_file) as fin, open(filtered_bed, 'w') as fout:
-        for line in fin:
-            if line.startswith('track'):
-                continue
-            chrom, start, end, name, _, strand = line.rstrip().split('\t')
-            if int(end)-int(start) > 1:
-                continue
-            fout.write('\t'.join([chrom, start, end, name, strand]) + '\n')
+    if not skip_filter:
+        print('Making filtered snp_only bed file')
+        with open_zipped(dbsnp_file) as fin, open(filtered_bed, 'w') as fout:
+            for line in fin:
+                if line.startswith('track'):
+                    continue
+                chrom, start, end, name, _, strand = line.rstrip().split('\t')
+                if int(end)-int(start) > 1:
+                    continue
+                fout.write('\t'.join([chrom, start, end, name, strand]) + '\n')
     # Create a lookup file sorted by rsid
     print('Making rsid lookup table')
-    script = r"""cat {name}.bed | awk '{print $4 "\t" $1 "\t" $2 "\t" $3}' | sort -k1,1 > {name}.rslookup.rs_sort.txt"""
-    _call(script.format(name=outname), shell=True)
+    script = r"""cat {name} | awk '{{print $4 "\t" $1 "\t" $2 "\t" $3}}' | sort -k1,1 > {name}.rslookup.rs_sort.txt"""
+    _call(script.format(name=filtered_bed), shell=True)
     # Create a location lookup file sorted by the start location (base-1)
     print('Making start location lookup table')
-    script = r"""cat {name}.bed | awk '{print $1"."$2 "\t" $4}' | sort -k1,1 > {name}.rslookup.start_sort.txt"""
-    _call(script.format(name=outname), shell=True)
+    script = r"""cat {name} | awk '{{print $1"."$2 "\t" $4}}' | sort -k1,1 > {name}.rslookup.start_sort.txt"""
+    _call(script.format(name=filtered_bed), shell=True)
     # Create a location lookup file sorted by the end location (base-1)
     print('Making end location lookup table')
-    script = r"""cat {name}.bed | awk '{print $1"."$3 "\t" $4}' | sort -k1,1 > {name}.rslookup.end_sort.txt"""
-    _call(script.format(name=outname), shell=True)
+    script = r"""cat {name} | awk '{{print $1"."$3 "\t" $4}}' | sort -k1,1 > {name}.rslookup.end_sort.txt"""
+    _call(script.format(name=filtered_bed), shell=True)
     print('Done')
 
 
