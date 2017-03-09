@@ -86,6 +86,8 @@ def clean_df(df, rsid_col='rsID', risk_allele_col='risk_allele',
     df = rsids.clean_and_normalize_rsids(df, rsid_col, convert_df)
     print('Force PMIDs to string')
     df['pmid'] = df.pmid.astype(str)
+    print('Drop duplicates')
+    df = drop_duplicates(df)
     return df
 
 
@@ -155,6 +157,26 @@ def clean_rsids_add_locations(df, rsid_col='rsID',
 ###############################################################################
 #                                  Clean DF                                   #
 ###############################################################################
+
+
+def drop_duplicates(df):
+    """Sorts DF by source, drops all duplicates, and then sorts by rsID.
+
+    Duplicates are dropped by [pmid, trait, rsID, populatio, risk_allele]
+
+    Returns:
+        DataFrame: Clone of original dataframe with dups dropped.
+    """
+    orig = len(df)
+    if 'source' in df.columns:
+        df.sort_values('source', inplace=True)
+    df.drop_duplicates(['pmid', 'trait', 'rsID', 'population', 'risk_allele'],
+                       inplace=True)
+    if 'source' in df.columns:
+        df.sort_values('rsID', inplace=True)
+    final = len(df)
+    print('Dropped {} duplicates'.format(orig-final))
+    return df
 
 
 def clean_df_whitespace(df):
