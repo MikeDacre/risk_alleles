@@ -3,7 +3,6 @@
 SQLAlchemy database mappings for the risk allele database.
 """
 import os as _os
-import sys as _sys
 from shutil import copy as _copy
 
 from time import sleep as _sleep
@@ -17,6 +16,8 @@ import pandas as _pd
 
 from sqlalchemy import create_engine as _create_engine
 from sqlalchemy import Column as _Column
+from sqlalchemy import or_ as _or
+from sqlalchemy import and_ as _and
 from sqlalchemy import Date as _Date
 from sqlalchemy import Float as _Float
 from sqlalchemy import Index as _Index
@@ -327,9 +328,106 @@ class RiskAlleles(object):
                    would return only a list of rsids.
         """
         if not args:
-            args = (self.snp_table,)
+            args = (RiskAllele,)
         session = self.get_session()
         return session.query(*args)
+
+    def get_dataframe(self, pval=None, rsid=None, trait=None, population=None,
+                      position=None, limit=None):
+        """Filter database and return results as a dataframe.
+
+        All arguments are optional and additive, no arguments will return the
+        whole database.
+
+        Note that using multiple arguments at the same time can make the
+        operation very, very slow, try to use as few as possible.
+
+        Args:
+            pval (float):          Filter by pvalue less than this number.
+            rsid (str/list):       Filter by rsid, can be a list of rsids.
+            trait (str/list):      Filter by trait name, can be a list.
+            population (str/list): Filter by population, can be a list.
+            position (str, list):  Filter by location, syntax is important,
+                                   must be:
+                                       chr:start-end
+                                   End is optional, both numbers are base-0.
+                                   You can provide a list of these, but each
+                                   must match the syntax requirements.
+            limit (int):           Number of results to limit to.
+
+        Returns:
+            DataFrame: A pandas dataframe of the results.
+        """
+        query = self.query()
+        if pval:
+            assert isinstance(pval, (float, int))
+            query = query.filter(RiskAllele.P < pval)
+        if rsid:
+            if isinstance(rsid, str):
+                query = query.filter(RiskAllele.rsID == rsid)
+            else:
+                query = query.filter(RiskAllele.rsID.in_(listify(rsid)))
+        if trait:
+            if isinstance(trait, int):
+                query = query.filter(RiskAllele.trait_id == trait)
+            elif isinstance(trait, str):
+                query = query.filter(Trait.trait == trait)
+                query = query.filter(RiskAllele.trait_id == Trait.id)
+            else:
+                trait = listify(trait)
+                if isinstance(trait, int):
+                    query = query.filter(RiskAllele.trait.in_(trait))
+                else:
+                    query = query.filter(Trait.trait.in_(trait))
+                    query = query.filter(RiskAllele.trait_id.in_(Trait.id))
+        if population:
+            if isinstance(population, str):
+                query = query.filter(RiskAllele.population == population)
+            else:
+                query = query.filter(RiskAllele.population.in_(
+                    listify(population)
+                ))
+        if position:
+            if isinstance(position, str):
+                chrom, start, end = parse_position(position)
+                query = query.filter(RiskAllele.chrom == chrom)
+                if start:
+                    if end:
+                        query = query.filter(
+                            RiskAllele.position.between(start, end)
+                        )
+                    else:
+                        query = query.filter(RiskAllele.position == start)
+            else:
+                positions = listify(position)
+                or_list = []
+                for pos in positions:
+                    chrom, start, end = parse_position(pos)
+                    if start:
+                        if end:
+                            or_list.append(
+                                _and(
+                                    RiskAllele.chrom == chrom,
+                                    RiskAllele.position.between(start, end)
+                                )
+                            )
+                        else:
+                            or_list.append(
+                                _and(
+                                    RiskAllele.chrom == chrom,
+                                    RiskAllele.position == start
+                                )
+                            )
+                    else:
+                        or_list.append(RiskAllele.chrom == chrom)
+                query = query.filter(_or(*or_list))
+
+        # Set limits
+        if limit:
+            query = query.limit(int(limit))
+
+        # Get DataFrame
+        return _pd.read_sql_query(query.statement)
 
     @property
     def pmids(self):
@@ -449,3 +547,22 @@ def get_pubmed_info(pmid):
         '%Y %b %d'
     )
     return title, pubdate
+
+
+def listify(x):
+    """Turn an iterable into a list if possible."""
+    if isinstance(x, (str, int, float)):
+        return [x]
+    return list(x)
+
+
+def parse_position(x):
+    """Parse chrom:start-end into chrom, start, end."""
+    if ':' in x:
+        chrom, rng = x.split(':')
+    else:
+        return x, None, None
+    if '-' in chrom:
+        start, end = rng.split('-')
+        return chrom, int(start), int(end)
+    return chrom, int(rng), None
