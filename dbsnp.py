@@ -34,6 +34,8 @@ import gzip as _gzip
 import argparse as _argparse
 from random import randint as _rand
 from subprocess import check_call as _call
+from subprocess import STDOUT as _STDOUT
+from subprocess import CalledProcessError as _call_err
 
 import pandas as pd
 
@@ -68,7 +70,7 @@ def join_rsid(rsids, dbsnp_file, outfile, sort=True, as_df=False):
 
     if isinstance(rsids, (list, tuple, set)):
         rsids = sorted(list(set(rsids)))
-        tmpfile = outfile + 'rsids.tmp'
+        tmpfile = outfile + '.rsids.tmp'
         with open(tmpfile, 'w') as fout:
             fout.write('\n'.join(rsids))
         rsids = tmpfile
@@ -82,13 +84,19 @@ def join_rsid(rsids, dbsnp_file, outfile, sort=True, as_df=False):
         print('Sorting')
         cat = 'zcat' if rsids.endswith('gz') else 'cat'
         tmpfile = 'tmpsort_{}'.format(_rand(1000,20000))
-        script = r"""{cat} {rsids} | sort -k1,1 > {tmp}; mv {tmp} {rsids}"""
+        script = r"""{cat} {rsids} | sort > {tmp}; mv {tmp} {rsids}"""
         _call(script.format(cat=cat, rsids=rsids, tmp=tmpfile), shell=True)
 
     print('Joining')
     script = r"""join {rsids} {dbsnp} > {outfile}"""
-    _call(script.format(rsids=rsids, dbsnp=dbsnp_file, outfile=outfile),
-          shell=True)
+    try:
+        _call(
+            script.format(rsids=rsids, dbsnp=dbsnp_file, outfile=outfile),
+            stderr=_STDOUT, shell=True, universal_newlines=True
+        )
+    except _call_err as exc:
+        print("Status : FAIL", exc.returncode, exc.output)
+        raise exc
     print('Done, file {} has the joined list'.format(outfile))
 
     if as_df:
