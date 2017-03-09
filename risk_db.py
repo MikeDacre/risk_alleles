@@ -6,10 +6,14 @@ import os as _os
 import sys as _sys
 from shutil import copy as _copy
 
+from time import sleep as _sleep
+
 from datetime import datetime as _dt
 
 from urllib.request import urlopen as _req
 from xml.dom.minidom import parseString as _ps
+
+import pandas as _pd
 
 from sqlalchemy import create_engine as _create_engine
 from sqlalchemy import Column as _Column
@@ -66,7 +70,7 @@ class RiskAllele(Base):
     __tablename__ = 'risk_alleles'
 
     id              = _Column(_Integer, primary_key=True)
-    pmid            = _Column(_Integer, _ForeignKey('pmids.pmid'), nullable=False)
+    pmid            = _Column(_String, _ForeignKey('pmids.pmid'), nullable=False)
     trait_id        = _Column(_Integer, _ForeignKey('traits.id'), nullable=False)
     trait           = _relationship('Trait', back_populates='snps')
     rsID            = _Column(_String, index=True, nullable=False)
@@ -93,8 +97,7 @@ class RiskAllele(Base):
     loc       = _Index('loc', chrom, position)
 
     # Make pmid, trait, rsID, population, risk_allele unique
-    snp_info = _Index('pmid', 'trait_id', 'rsID', 'population', 'risk_allele')
-    _Unique('pmid', 'trait_id', 'rsID', 'population', 'risk_allele')
+    _Unique(pmid, trait_id, rsID, population, risk_allele)
 
     def __repr__(self):
         """Better display of data."""
@@ -133,7 +136,7 @@ class PMID(Base):
 
     __tablename__ = 'pmids'
 
-    pmid    = _Column(_Integer, primary_key=True)
+    pmid    = _Column(_String, primary_key=True)
     title   = _Column(_String, nullable=True)
     pubdate = _Column(_Date, nullable=True)
     snps    = _relationship('RiskAllele')
@@ -142,9 +145,12 @@ class PMID(Base):
         """Get info from ID and set."""
         self.pmid = pmid
         if add_study_data:
-            title, pubdate = get_pubmed_info(pmid)
-            self.title   = title
-            self.pubdate = pubdate
+            try:
+                title, pubdate = get_pubmed_info(pmid)
+                self.title   = title
+                self.pubdate = pubdate
+            except:
+                pass
 
     def __repr__(self):
         """Display summary stats."""
@@ -199,7 +205,7 @@ class RiskAlleles(object):
     #                              Adding Data                               #
     ##########################################################################
 
-    def add_new_study(self, df):
+    def add_new_study(self, df, confirm=True):
         """Take a dataframe with the same columns as us and write it to self.
 
         Note: Will append all data to the database, which means it will not
@@ -213,7 +219,7 @@ class RiskAlleles(object):
         your_pmids = df.pmid.unique()
         our_pmids  = self.pmids
         for pmid in your_pmids:
-            if pmid in our_pmids:
+            if pmid in our_pmids and confirm:
                 ans = input('PMID {} already in DB, add anyway? [y/N] '
                             .format(pmid))
                 if not ans.upper().startswith('Y'):
@@ -221,11 +227,30 @@ class RiskAlleles(object):
                     return
 
         df = df.copy()
-        df['trait_id'] = df.trait.apply(self.add_trait)
+
+        traits = [{'trait': t} for t in df.trait.unique() if t not in self.traits]
+        if traits:
+            print('Adding missing traits')
+            conn = self.engine.connect()
+            ins = self.trait_table.__table__.insert()
+            conn.execute(ins, traits)
+        traits = _pd.DataFrame.from_dict(self.traits, orient='index')
+        traits.columns = ['trait_id']
+
+        print('Adding traits to dataframe')
+        df = _pd.merge(df, traits, how='left', left_on='trait',
+                       right_index=True)
         df = df.drop('trait', axis=1)
-        df.pmid.apply(self.add_pmid)
+
+        print('Adding studies')
+        for pmid in [str(i) for i in df.pmid.unique()]:
+            if pmid not in self.pmids:
+                print(pmid)
+                self.add_pmid(pmid)
+                _sleep(0.2)
 
         # Correct columns
+        print('Cleaning columns')
         lookup = {
             'OR/B':         'OR_B',
             'start':        'position',
@@ -248,7 +273,7 @@ class RiskAlleles(object):
                 ok_cols.append(col)
             else:
                 bad_cols.append(col)
-        if bad_cols:
+        if bad_cols and confirm:
             ans = input('Columns {} are not allowed in the db and will be '
                         .format(bad_cols) +
                         'dropped. Continue writing to the DB? [y/N] ')
@@ -260,6 +285,7 @@ class RiskAlleles(object):
         df = df[ok_cols]
 
         # Add to db using pandas syntax
+        print('Adding data')
         df.to_sql('risk_alleles',
                   self.engine,
                   chunksize=100000,
@@ -324,12 +350,12 @@ class RiskAlleles(object):
     #                          Maintenance Methods                           #
     ##########################################################################
 
-    def create_database(self, check=True):
+    def create_database(self, confirm=True):
         """Create the db from scratch.
 
         Note: Will DELETE the current database!!!
         """
-        if check:
+        if confirm:
             ans = input('Are you sure you want to erase and recreate the db? ')
             if not ans.upper().startswith('Y'):
                 print('Aborting')
@@ -390,7 +416,8 @@ def get_pubmed_info(pmid):
     data = _ps(
         _req(
             'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
-            '?db=pubmed&retmode=xml&id={id}'.format(id=pmid)
+            '?db=pubmed&retmode=xml&id={id}'.format(id=pmid),
+            timeout=60
         ).read()
     )
 
