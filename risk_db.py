@@ -34,134 +34,209 @@ Base = _base()
 
 location = '/godot/risk_alleles/risk_alleles.db'
 
+P_CUTOFF = 0.005
+
 
 ###############################################################################
 #                              Table Declaration                              #
 ###############################################################################
 
 
-class RiskAllele(Base):
+class T(object):
 
-    """This class holds the SQLAlchemy definition of the risk allele database.
+    """A wrapper for all SQLAlchemy Tables."""
 
-    Always Populated Columns:
-        id (int):          A unique ID
-        pmid (int):        The pubmed ID of the study
-        trait (str):       A string describing the trait of interest
-        rsID (str):        The rsid of the SNP
-        population (str):  The population the data is for
-        risk_allele (str): The risk allele
+    class Trait(Base):
 
-    Optional Columns:
-        chrom (str):      Chromosome string (hg19)
-        pos (int):        Position on chromosome (hg19)
-        A1 (str):         The A1 allele
-        A2 (str):         The A2 allele
-        OR (float):       The odds ratio for A1
-        B (float):        The beta (effect size) for A1
-        OR_B (float):     Either the OR or B
-        P (float):        p-value of the SNP-trait pair
-        N (int):          Number of individuals supporting the SNP
-        N_Cases (int):    Number of of individuals in the case group
-        N_Controls (int): Number of of individuals in the control group
-        source (str):     Which database this record is from
-        grasp_id (int):   The ID of this SNP-trait pair in the GRASP database
-        population_info (str): Extra population information
-    """
-    __tablename__ = 'risk_alleles'
+        """This class holds a lookup table of traits."""
 
-    id              = _Column(_Integer, primary_key=True)
-    pmid            = _Column(_String, _ForeignKey('pmids.pmid'), nullable=False)
-    trait_id        = _Column(_Integer, _ForeignKey('traits.id'), nullable=False)
-    trait           = _relationship('Trait', back_populates='snps')
-    rsID            = _Column(_String, index=True, nullable=False)
-    population      = _Column(_String, index=True, nullable=False)
-    risk_allele     = _Column(_String(1), nullable=False)
-    chrom           = _Column(_String, index=True)
-    position        = _Column(_Integer, index=True)
-    A1              = _Column(_String)
-    A2              = _Column(_String)
-    OR              = _Column(_Float, index=True)
-    B               = _Column(_Float)
-    OR_B            = _Column(_Float)
-    P               = _Column(_Float(precision=128), index=True)
-    cases_MAF       = _Column(_Float)
-    controls_MAF    = _Column(_Float)
-    N               = _Column(_Integer)
-    N_cases         = _Column(_Integer)
-    N_controls      = _Column(_Integer)
-    source          = _Column(_String)
-    grasp_id        = _Column(_Integer)
-    population_info = _Column(_String)
+        __tablename__ = 'traits'
 
-    pmid_rsid = _Index('pmid_rsid', pmid, rsID)
-    loc       = _Index('loc', chrom, position)
+        id      = _Column(_Integer, primary_key=True)
+        trait   = _Column(_String, index=True, nullable=False)
 
-    # Make pmid, trait, rsID, population, risk_allele unique
-    _Unique(pmid, trait_id, rsID, population, risk_allele)
+        def __repr__(self):
+            """Display summary stats."""
+            return "Trait<id={id}, trait={trait}>".format(
+                id=self.id, trait=self.trait
+            )
 
-    def __repr__(self):
-        """Better display of data."""
-        out = ("RiskAllele<id={id}, pmid={pmid}, rsID={rsid}, trait={trait}, "
-               "risk_allele={risk_allele}>")
-        return out.format(
-            id=self.id, pmid=self.pmid, rsid=self.rsID, trait=self.trait.trait,
-            risk_allele=self.risk_allele
-        )
+        def __len__(self):
+            """Number of SNPs."""
+            return len(self.snps)
 
+    class PMID(Base):
 
-class Trait(Base):
+        """This class holds a lookup table of rsids."""
 
-    """This class holds a lookup table of traits."""
+        __tablename__ = 'pmids'
 
-    __tablename__ = 'traits'
+        pmid    = _Column(_String, primary_key=True)
+        title   = _Column(_String, nullable=True)
+        pubdate = _Column(_Date, nullable=True)
 
-    id    = _Column(_Integer, primary_key=True)
-    trait = _Column(_String, index=True, nullable=False)
-    snps  = _relationship('RiskAllele', back_populates='trait')
+        def __init__(self, pmid, add_study_data=True):
+            """Get info from ID and set."""
+            self.pmid = pmid
+            if add_study_data:
+                try:
+                    title, pubdate = get_pubmed_info(pmid)
+                    self.title   = title
+                    self.pubdate = pubdate
+                except:
+                    pass
 
-    def __repr__(self):
-        """Display summary stats."""
-        return "Trait<id={id}, trait={trait}>".format(
-            id=self.id, trait=self.trait
-        )
+        def __repr__(self):
+            """Display summary stats."""
+            return "PMID<pmid={pmid}, title={title}, pubdate={pubdate}>".format(
+                pmid=self.pmid, title=self.title, pubdate=self.pubdate
+            )
 
-    def __len__(self):
-        """Number of SNPs."""
-        return len(self.snps)
+        def __len__(self):
+            """Number of SNPs."""
+            return len(self.snps)
 
+    class RiskAllele(Base):
 
-class PMID(Base):
+        """This class holds the SQLAlchemy definition of the risk allele table.
 
-    """This class holds a lookup table of rsids."""
+        Always Populated Columns:
+            id (int):          A unique ID
+            pmid (int):        The pubmed ID of the study
+            trait (str):       A string describing the trait of interest
+            rsID (str):        The rsid of the SNP
+            population (str):  The population the data is for
+            risk_allele (str): The risk allele
 
-    __tablename__ = 'pmids'
+        Optional Columns:
+            chrom (str):      Chromosome string (hg19)
+            position (int):   Position on chromosome (hg19)
+            A1 (str):         The A1 allele
+            A2 (str):         The A2 allele
+            OR (float):       The odds ratio for A1
+            B (float):        The beta (effect size) for A1
+            OR_B (float):     Either the OR or B
+            P (float):        p-value of the SNP-trait pair
+            N (int):          Number of individuals supporting the SNP
+            N_cases (int):    Number of of individuals in the case group
+            N_controls (int): Number of of individuals in the control group
+            source (str):     Which database this record is from
+            grasp_id (int):   The ID of this SNP-trait pair in the GRASP database
+            population_info (str): Extra population information
+        """
+        __tablename__ = 'risk_alleles'
 
-    pmid    = _Column(_String, primary_key=True)
-    title   = _Column(_String, nullable=True)
-    pubdate = _Column(_Date, nullable=True)
-    snps    = _relationship('RiskAllele')
+        id              = _Column(_Integer, primary_key=True)
+        pmid            = _Column(_String, _ForeignKey('pmids.pmid'), nullable=False)
+        paper           = _relationship('PMID', backref='snps')
+        trait_id        = _Column(_Integer, _ForeignKey('traits.id'), nullable=False)
+        trait           = _relationship('Trait', backref='snps')
+        rsID            = _Column(_String, index=True, nullable=False)
+        population      = _Column(_String, index=True, nullable=False)
+        risk_allele     = _Column(_String(1), nullable=False)
+        chrom           = _Column(_String, index=True)
+        position        = _Column(_Integer, index=True)
+        A1              = _Column(_String)
+        A2              = _Column(_String)
+        OR              = _Column(_Float, index=True)
+        B               = _Column(_Float)
+        OR_B            = _Column(_Float)
+        P               = _Column(_Float(precision=128), index=True)
+        cases_MAF       = _Column(_Float)
+        controls_MAF    = _Column(_Float)
+        N               = _Column(_Integer)
+        N_cases         = _Column(_Integer)
+        N_controls      = _Column(_Integer)
+        source          = _Column(_String)
+        grasp_id        = _Column(_Integer)
+        population_info = _Column(_String)
 
-    def __init__(self, pmid, add_study_data=True):
-        """Get info from ID and set."""
-        self.pmid = pmid
-        if add_study_data:
-            try:
-                title, pubdate = get_pubmed_info(pmid)
-                self.title   = title
-                self.pubdate = pubdate
-            except:
-                pass
+        pmid_rsid = _Index('pmid_rsid', pmid, rsID)
+        loc       = _Index('loc', chrom, position)
 
-    def __repr__(self):
-        """Display summary stats."""
-        return "PMID<pmid={pmid}, title={title}, pubdate={pubdate}>".format(
-            pmid=self.pmid, title=self.title, pubdate=self.pubdate
-        )
+        # Make pmid, trait, rsID, population, risk_allele unique
+        _Unique(pmid, trait_id, rsID, population, risk_allele)
 
-    def __len__(self):
-        """Number of SNPs."""
-        return len(self.snps)
+        def __repr__(self):
+            """Better display of data."""
+            out = ("RiskAllele<id={id}, pmid={pmid}, rsID={rsid}, trait={trait}, "
+                   "risk_allele={risk_allele}>")
+            return out.format(
+                id=self.id, pmid=self.pmid, rsid=self.rsID, trait=self.trait.trait,
+                risk_allele=self.risk_allele
+            )
+
+    class SigRiskAllele(Base):
+
+        """This class holds the SQLAlchemy definition for significant risk allele.
+
+        P-Value Cutoff = 0.005
+
+        Always Populated Columns:
+            id (int):          A unique ID
+            pmid (int):        The pubmed ID of the study
+            trait (str):       A string describing the trait of interest
+            rsID (str):        The rsid of the SNP
+            population (str):  The population the data is for
+            risk_allele (str): The risk allele
+
+        Optional Columns:
+            chrom (str):      Chromosome string (hg19)
+            position (int):   Position on chromosome (hg19)
+            A1 (str):         The A1 allele
+            A2 (str):         The A2 allele
+            OR (float):       The odds ratio for A1
+            B (float):        The beta (effect size) for A1
+            OR_B (float):     Either the OR or B
+            P (float):        p-value of the SNP-trait pair
+            N (int):          Number of individuals supporting the SNP
+            N_cases (int):    Number of of individuals in the case group
+            N_controls (int): Number of of individuals in the control group
+            source (str):     Which database this record is from
+            grasp_id (int):   The ID of this SNP-trait pair in the GRASP database
+            population_info (str): Extra population information
+        """
+        __tablename__ = 'sig_risk_alleles'
+
+        id              = _Column(_Integer, primary_key=True)
+        pmid            = _Column(_String, _ForeignKey('pmids.pmid'), nullable=False)
+        paper           = _relationship('PMID', backref='sigsnps')
+        trait_id        = _Column(_Integer, _ForeignKey('traits.id'), nullable=False)
+        trait           = _relationship('Trait', backref='sigsnps')
+        rsID            = _Column(_String, index=True, nullable=False)
+        population      = _Column(_String, index=True, nullable=False)
+        risk_allele     = _Column(_String(1), nullable=False)
+        chrom           = _Column(_String, index=True)
+        position        = _Column(_Integer, index=True)
+        A1              = _Column(_String)
+        A2              = _Column(_String)
+        OR              = _Column(_Float, index=True)
+        B               = _Column(_Float)
+        OR_B            = _Column(_Float)
+        P               = _Column(_Float(precision=128), index=True)
+        cases_MAF       = _Column(_Float)
+        controls_MAF    = _Column(_Float)
+        N               = _Column(_Integer)
+        N_cases         = _Column(_Integer)
+        N_controls      = _Column(_Integer)
+        source          = _Column(_String)
+        grasp_id        = _Column(_Integer)
+        population_info = _Column(_String)
+
+        pmid_rsid = _Index('sig_pmid_rsid', pmid, rsID)
+        loc       = _Index('sig_loc', chrom, position)
+
+        # Make pmid, trait, rsID, population, risk_allele unique
+        _Unique(pmid, trait_id, rsID, population, risk_allele)
+
+        def __repr__(self):
+            """Better display of data."""
+            out = ("SigRiskAllele<id={id}, pmid={pmid}, rsID={rsid}, trait={trait}, "
+                   "risk_allele={risk_allele}>")
+            return out.format(
+                id=self.id, pmid=self.pmid, rsid=self.rsID, trait=self.trait.trait,
+                risk_allele=self.risk_allele
+            )
 
 
 ###############################################################################
@@ -169,15 +244,61 @@ class PMID(Base):
 ###############################################################################
 
 
-class RiskAlleles(object):
+class DB(object):
 
     """A wrapper for the entire risk allele database."""
 
-    snp_table   = RiskAllele
-    trait_table = Trait
-    pmid_table  = PMID
-    columns     = list(snp_table.__table__.columns.keys())
     location    = '/godot/risk_alleles/risk_alleles.db'
+
+    basic_columns = [
+        T.RiskAllele.rsID,
+        T.RiskAllele.population,
+        T.Trait.trait,
+        T.RiskAllele.risk_allele,
+        T.RiskAllele.pmid,
+        T.PMID.title,
+    ]
+
+    extra_columns = [
+        T.RiskAllele.chrom,
+        T.RiskAllele.position,
+        T.RiskAllele.A1,
+        T.RiskAllele.A2,
+        T.RiskAllele.OR,
+        T.RiskAllele.B,
+        T.RiskAllele.OR_B,
+        T.RiskAllele.P,
+        T.RiskAllele.N,
+        T.RiskAllele.N_cases,
+        T.RiskAllele.N_controls,
+        T.RiskAllele.source,
+        T.RiskAllele.grasp_id,
+        T.RiskAllele.population_info,
+    ]
+    basic_columns_sig = [
+        T.SigRiskAllele.rsID,
+        T.SigRiskAllele.population,
+        T.Trait.trait,
+        T.SigRiskAllele.risk_allele,
+        T.SigRiskAllele.pmid,
+        T.PMID.title,
+    ]
+    extra_columns_sig = [
+        T.SigRiskAllele.chrom,
+        T.SigRiskAllele.position,
+        T.SigRiskAllele.A1,
+        T.SigRiskAllele.A2,
+        T.SigRiskAllele.OR,
+        T.SigRiskAllele.B,
+        T.SigRiskAllele.OR_B,
+        T.SigRiskAllele.P,
+        T.SigRiskAllele.N,
+        T.SigRiskAllele.N_cases,
+        T.SigRiskAllele.N_controls,
+        T.SigRiskAllele.source,
+        T.SigRiskAllele.grasp_id,
+        T.SigRiskAllele.population_info,
+    ]
 
     def __init__(self, loc=None):
         """Attach to a database, create if does not exist."""
@@ -187,6 +308,7 @@ class RiskAlleles(object):
         self.engine   = _create_engine('sqlite:///{}'.format(self.location))
         if not _os.path.isfile(self.location):
             self.create_database()
+        self.columns = list(T.RiskAllele.__table__.columns.keys())
 
     ##########################################################################
     #                           Basic Connectivity                           #
@@ -233,7 +355,7 @@ class RiskAlleles(object):
         if traits:
             print('Adding missing traits')
             conn = self.engine.connect()
-            ins = self.trait_table.__table__.insert()
+            ins = T.Trait.__table__.insert()
             conn.execute(ins, traits)
         traits = _pd.DataFrame.from_dict(self.traits, orient='index')
         traits.columns = ['trait_id']
@@ -293,12 +415,22 @@ class RiskAlleles(object):
                   index=False,
                   if_exists='append')
 
+        # Add significant SNPs to sig table
+        df = df[df.P < P_CUTOFF].copy()
+        print('Adding signficiant SNP table')
+        df.to_sql('sig_risk_alleles',
+                  self.engine,
+                  chunksize=100000,
+                  index=False,
+                  if_exists='append')
+
+
     def add_pmid(self, pmid):
         """Check if pmid is in DB, if not, add. Return ID."""
         if pmid not in self.pmids:
             print('Adding pubmed id {}'.format(pmid))
             session = self.get_session()
-            new_pmid = PMID(pmid=pmid, add_study_data=True)
+            new_pmid = T.PMID(pmid=pmid, add_study_data=True)
             session.add(new_pmid)
             session.commit()
         return pmid
@@ -308,10 +440,10 @@ class RiskAlleles(object):
         session = self.get_session()
         if trait not in self.traits:
             print('Adding trait {}'.format(trait))
-            new_trait = Trait(trait=trait)
+            new_trait = T.Trait(trait=trait)
             session.add(new_trait)
             session.commit()
-        i = session.query(Trait.id).filter(Trait.trait == trait).first()
+        i = session.query(T.Trait.id).filter(T.Trait.trait == trait).first()
         return i[0]
 
     ##########################################################################
@@ -328,12 +460,24 @@ class RiskAlleles(object):
                    would return only a list of rsids.
         """
         if not args:
-            args = (RiskAllele,)
+            args = (T.RiskAllele,)
         session = self.get_session()
         return session.query(*args)
 
+    def significant(self):
+        """Return all significant SNPs as a DataFrame."""
+        session = self.get_session()
+        return _pd.read_sql_query(
+            session.query(*self.basic_columns_sig).filter(
+                T.SigRiskAllele.trait_id == T.Trait.id
+            ).filter(
+                T.SigRiskAllele.pmid == T.PMID.pmid
+            ).statement,
+            self.engine
+        )
+
     def get_dataframe(self, pval=None, rsid=None, trait=None, population=None,
-                      position=None, limit=None):
+                      position=None, limit=None, sig_only=False):
         """Filter database and return results as a dataframe.
 
         All arguments are optional and additive, no arguments will return the
@@ -354,50 +498,52 @@ class RiskAlleles(object):
                                    You can provide a list of these, but each
                                    must match the syntax requirements.
             limit (int):           Number of results to limit to.
+            sig_only (bool):       Only return results in the significant table.
 
         Returns:
             DataFrame: A pandas dataframe of the results.
         """
         query = self.query()
+        rtable = T.SigRiskAllele if sig_only else T.RiskAllele
         if pval:
             assert isinstance(pval, (float, int))
-            query = query.filter(RiskAllele.P < pval)
+            query = query.filter(rtable.P < pval)
         if rsid:
             if isinstance(rsid, str):
-                query = query.filter(RiskAllele.rsID == rsid)
+                query = query.filter(rtable.rsID == rsid)
             else:
-                query = query.filter(RiskAllele.rsID.in_(listify(rsid)))
+                query = query.filter(rtable.rsID.in_(listify(rsid)))
         if trait:
             if isinstance(trait, int):
-                query = query.filter(RiskAllele.trait_id == trait)
+                query = query.filter(rtable.trait_id == trait)
             elif isinstance(trait, str):
-                query = query.filter(Trait.trait == trait)
-                query = query.filter(RiskAllele.trait_id == Trait.id)
+                query = query.filter(T.Trait.trait == trait)
+                query = query.filter(rtable.trait_id == T.Trait.id)
             else:
                 trait = listify(trait)
                 if isinstance(trait, int):
-                    query = query.filter(RiskAllele.trait.in_(trait))
+                    query = query.filter(rtable.trait.in_(trait))
                 else:
-                    query = query.filter(Trait.trait.in_(trait))
-                    query = query.filter(RiskAllele.trait_id.in_(Trait.id))
+                    query = query.filter(T.Trait.trait.in_(trait))
+                    query = query.filter(rtable.trait_id.in_(T.Trait.id))
         if population:
             if isinstance(population, str):
-                query = query.filter(RiskAllele.population == population)
+                query = query.filter(rtable.population == population)
             else:
-                query = query.filter(RiskAllele.population.in_(
+                query = query.filter(rtable.population.in_(
                     listify(population)
                 ))
         if position:
             if isinstance(position, str):
                 chrom, start, end = parse_position(position)
-                query = query.filter(RiskAllele.chrom == chrom)
+                query = query.filter(rtable.chrom == chrom)
                 if start:
                     if end:
                         query = query.filter(
-                            RiskAllele.position.between(start, end)
+                            rtable.position.between(start, end)
                         )
                     else:
-                        query = query.filter(RiskAllele.position == start)
+                        query = query.filter(rtable.position == start)
             else:
                 positions = listify(position)
                 or_list = []
@@ -407,19 +553,19 @@ class RiskAlleles(object):
                         if end:
                             or_list.append(
                                 _and(
-                                    RiskAllele.chrom == chrom,
-                                    RiskAllele.position.between(start, end)
+                                    rtable.chrom == chrom,
+                                    rtable.position.between(start, end)
                                 )
                             )
                         else:
                             or_list.append(
                                 _and(
-                                    RiskAllele.chrom == chrom,
-                                    RiskAllele.position == start
+                                    rtable.chrom == chrom,
+                                    rtable.position == start
                                 )
                             )
                     else:
-                        or_list.append(RiskAllele.chrom == chrom)
+                        or_list.append(rtable.chrom == chrom)
                 query = query.filter(_or(*or_list))
 
         # Set limits
@@ -427,20 +573,22 @@ class RiskAlleles(object):
             query = query.limit(int(limit))
 
         # Get DataFrame
-        return _pd.read_sql_query(query.statement)
+        df = _pd.read_sql_query(query.statement, self.engine, index_col='id')
+        df.index.name = None
+        return df
 
     @property
     def pmids(self):
         """Return a list of pubmed ids in self."""
-        return [i[0] for i in self.query(self.pmid_table.pmid).all()]
+        return [i[0] for i in self.query(T.PMID.pmid).all()]
 
     @property
     def traits(self):
         """Return a dictionary of trait=>id."""
         return {
             t: i for t, i in self.query(
-                self.trait_table.trait,
-                self.trait_table.id
+                T.Trait.trait,
+                T.Trait.id
             ).all()
         }
 
@@ -477,17 +625,17 @@ class RiskAlleles(object):
     def __getitem__(self, x):
         """Quick access to rsids."""
         if isinstance(x, str):
-            return self.query().filter(self.snp_table.rsID == x).all()
+            return self.query().filter(T.RiskAllele.rsID == x).all()
         try:
             x = list(x)
         except TypeError:
             raise TypeError('Cannot lookup {}'.format(x))
-        return self.query().filter(self.snp_table.rsID.in_(x)).all()
+        return self.query().filter(T.RiskAllele.rsID.in_(x)).all()
 
     def __len__(self):
         """Print the length."""
         session = self.get_session()
-        return session.query(self.snp_table).count()
+        return session.query(T.RiskAllele).count()
 
     def __repr__(self):
         """Basic information about self."""
@@ -496,6 +644,7 @@ class RiskAlleles(object):
     def __str__(self):
         """Basic information about self."""
         return 'RiskAlleles<{location}>'.format(location=self.location)
+
 
 
 ###############################################################################
