@@ -6,6 +6,8 @@ import os as _os
 import sys as _sys
 from shutil import copy as _copy
 
+import json
+
 from time import sleep as _sleep
 
 from datetime import datetime as _dt
@@ -32,6 +34,8 @@ from sqlalchemy.ext.declarative import declarative_base as _base
 Base = _base()
 
 location = '/godot/risk_alleles/risk_alleles.db'
+
+db_config = _os.path.expanduser("~/.risk_alleles.json")
 
 
 ###############################################################################
@@ -182,10 +186,20 @@ class RiskAlleles(object):
         """Attach to a database, create if does not exist."""
         if not loc:
             loc = self.location
-        self.location = _os.path.abspath(location)
-        self.engine   = _create_engine('sqlite:///{}'.format(self.location))
-        if not _os.path.isfile(self.location):
-            self.create_database()
+        if _os.path.isfile(db_config):
+            print('Using configured db')
+            db_info = json.load(db_config)
+            self.engine = _create_engine(
+                'mysql://{}:{}@{}'.format(
+                    db_info.user, db_info.passwd, db_info.host
+                )
+            )
+        else:
+            print('Using sqlite')
+            self.location = _os.path.abspath(location)
+            self.engine   = _create_engine('sqlite:///{}'.format(self.location))
+            if not _os.path.isfile(self.location):
+                self.create_database()
 
     ##########################################################################
     #                           Basic Connectivity                           #
@@ -360,7 +374,7 @@ class RiskAlleles(object):
             if not ans.upper().startswith('Y'):
                 print('Aborting')
                 return
-        if _os.path.exists(self.location):
+        if _os.path.exists(self.location) and not _os.path.isfile(db_config):
             _os.remove(self.location)
         Base.metadata.create_all(self.engine)
         print('Done')
