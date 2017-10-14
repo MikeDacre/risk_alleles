@@ -251,10 +251,12 @@ class DB(object):
     location    = '/godot/risk_alleles/risk_alleles.db'
 
     basic_columns = [
+        T.RiskAllele.id,
         T.RiskAllele.rsID,
         T.RiskAllele.population,
         T.Trait.trait,
         T.RiskAllele.risk_allele,
+        T.RiskAllele.P,
         T.RiskAllele.pmid,
         T.PMID.title,
     ]
@@ -267,7 +269,6 @@ class DB(object):
         T.RiskAllele.OR,
         T.RiskAllele.B,
         T.RiskAllele.OR_B,
-        T.RiskAllele.P,
         T.RiskAllele.N,
         T.RiskAllele.N_cases,
         T.RiskAllele.N_controls,
@@ -276,10 +277,12 @@ class DB(object):
         T.RiskAllele.population_info,
     ]
     basic_columns_sig = [
+        T.SigRiskAllele.id,
         T.SigRiskAllele.rsID,
         T.SigRiskAllele.population,
         T.Trait.trait,
         T.SigRiskAllele.risk_allele,
+        T.SigRiskAllele.P,
         T.SigRiskAllele.pmid,
         T.PMID.title,
     ]
@@ -291,7 +294,6 @@ class DB(object):
         T.SigRiskAllele.OR,
         T.SigRiskAllele.B,
         T.SigRiskAllele.OR_B,
-        T.SigRiskAllele.P,
         T.SigRiskAllele.N,
         T.SigRiskAllele.N_cases,
         T.SigRiskAllele.N_controls,
@@ -300,12 +302,14 @@ class DB(object):
         T.SigRiskAllele.population_info,
     ]
 
-    def __init__(self, loc=None):
+    def __init__(self, loc=None, debug=False):
         """Attach to a database, create if does not exist."""
         if not loc:
             loc = self.location
         self.location = _os.path.abspath(location)
-        self.engine   = _create_engine('sqlite:///{}'.format(self.location))
+        kwargs = {'echo': True} if debug else {'echo': False}
+        self.engine   = _create_engine('sqlite:///{}'.format(self.location),
+                                       **kwargs)
         if not _os.path.isfile(self.location):
             self.create_database()
         self.columns = list(T.RiskAllele.__table__.columns.keys())
@@ -357,7 +361,8 @@ class DB(object):
             conn = self.engine.connect()
             ins = T.Trait.__table__.insert()
             conn.execute(ins, traits)
-        traits = _pd.DataFrame.from_dict(self.traits, orient='index')
+            conn.close()
+        traits = _pd.DataFrame.from_dict(self.trait_ids, orient='index')
         traits.columns = ['trait_id']
 
         print('Adding traits to dataframe')
@@ -416,14 +421,13 @@ class DB(object):
                   if_exists='append')
 
         # Add significant SNPs to sig table
-        df = df[df.P < P_CUTOFF].copy()
+        df2 = df[df.P < P_CUTOFF].copy()
         print('Adding signficiant SNP table')
-        df.to_sql('sig_risk_alleles',
+        df2.to_sql('sig_risk_alleles',
                   self.engine,
                   chunksize=100000,
                   index=False,
                   if_exists='append')
-
 
     def add_pmid(self, pmid):
         """Check if pmid is in DB, if not, add. Return ID."""
@@ -450,34 +454,24 @@ class DB(object):
     #                                Querying                                #
     ##########################################################################
 
-    def query(self, *args):
+    def query(self, *args, sig_only=False, **kwargs):
         """Wrapper for the SQLAlchemy query method of session.
 
+        If there are no args, then the whole table is returned, sig_only
+        modifies if the significant allele table or the whole table.
+
         Args:
-            *args: Any arguments allowed by session.query. If blank, self.table
-                   is used, which will return the whole database. To limit by
-                   columns, simply pass columns: query(self, self.table.rsID)
-                   would return only a list of rsids.
+            sig_only (bool): Limit to significant alleles table only.
+            *args, **kwargs: Any arguments allowed by session.query.
         """
         if not args:
-            args = (T.RiskAllele,)
+            rtable = T.SigRiskAllele if sig_only else T.RiskAllele
+            args = (rtable,)
         session = self.get_session()
-        return session.query(*args)
-
-    def significant(self):
-        """Return all significant SNPs as a DataFrame."""
-        session = self.get_session()
-        return _pd.read_sql_query(
-            session.query(*self.basic_columns_sig).filter(
-                T.SigRiskAllele.trait_id == T.Trait.id
-            ).filter(
-                T.SigRiskAllele.pmid == T.PMID.pmid
-            ).statement,
-            self.engine
-        )
+        return session.query(*args, **kwargs)
 
     def get_dataframe(self, pval=None, rsid=None, trait=None, population=None,
-                      position=None, limit=None, sig_only=False):
+                      position=None, limit=None, sig_only=False, extra=False):
         """Filter database and return results as a dataframe.
 
         All arguments are optional and additive, no arguments will return the
@@ -499,12 +493,21 @@ class DB(object):
                                    must match the syntax requirements.
             limit (int):           Number of results to limit to.
             sig_only (bool):       Only return results in the significant table.
+            extra (bool):          Add additional information columns to output.
 
         Returns:
             DataFrame: A pandas dataframe of the results.
         """
-        query = self.query()
+        # Choose columns
         rtable = T.SigRiskAllele if sig_only else T.RiskAllele
+        columns = self.basic_columns_sig if sig_only else self.basic_columns
+        if extra:
+            columns += self.extra_columns_sig if sig_only else self.extra_columns
+
+        # Get the initial query object
+        query = self.query(*columns)
+
+        # Run filters
         if pval:
             assert isinstance(pval, (float, int))
             query = query.filter(rtable.P < pval)
@@ -578,12 +581,35 @@ class DB(object):
         return df
 
     @property
+    def significant(self):
+        """Return all significant SNPs as a DataFrame."""
+        session = self.get_session()
+        return _pd.read_sql_query(
+            session.query(*self.basic_columns_sig).filter(
+                T.SigRiskAllele.trait_id == T.Trait.id
+            ).filter(
+                T.SigRiskAllele.pmid == T.PMID.pmid
+            ).statement,
+            self.engine,
+            index_col='id'
+        )
+
+    @property
     def pmids(self):
         """Return a list of pubmed ids in self."""
         return [i[0] for i in self.query(T.PMID.pmid).all()]
 
     @property
     def traits(self):
+        """Return a list of traits."""
+        return sorted([
+            t[0] for t in self.query(
+                T.Trait.trait,
+            ).all()
+        ])
+
+    @property
+    def trait_ids(self):
         """Return a dictionary of trait=>id."""
         return {
             t: i for t, i in self.query(
